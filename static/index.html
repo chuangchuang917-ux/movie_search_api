@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>電影評分搜尋網</title>
+    <!-- 引入 Tailwind CSS 進行現代化 UI 設計 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 PapaParse 解析 CSV 檔案 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <!-- 引入 Lucide 圖示庫 -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    // 全面放大基礎字級設定
+                    fontSize: {
+                        'xs': ['0.9rem', { lineHeight: '1.25rem' }],     /* 原 12px 放大為 ~14.5px */
+                        'sm': ['1.05rem', { lineHeight: '1.5rem' }],     /* 原 14px 放大為 ~17px */
+                        'base': ['1.15rem', { lineHeight: '1.75rem' }],  /* 原 16px 放大為 ~18.5px */
+                        'lg': ['1.3rem', { lineHeight: '1.75rem' }],     /* 原 18px 放大為 ~21px */
+                        'xl': ['1.5rem', { lineHeight: '2rem' }],        /* 原 20px 放大為 24px */
+                        '2xl': ['1.75rem', { lineHeight: '2.25rem' }],   /* 原 24px 放大為 28px */
+                        '3xl': ['2.25rem', { lineHeight: '2.5rem' }],    /* 原 30px 放大為 36px */
+                    },
+                    colors: {
+                        movieGold: '#F5C518', // IMDb 金黃色
+                        movieRed: '#FA320A',  // 爛番茄紅色
+                        movieGreen: '#00B51D' // 豆瓣綠色
+                    },
+                    boxShadow: {
+                        'neon-gold': '0 0 15px rgba(245, 197, 24, 0.15)',
+                        'neon-red': '0 0 15px rgba(250, 50, 10, 0.15)',
+                        'neon-green': '0 0 15px rgba(0, 181, 29, 0.15)',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* 精緻化捲軸 */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #020617;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #1e293b;
+            border-radius: 9999px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #334155;
+        }
+        
+        /* 平滑漸變過渡 */
+        .transition-all-300 {
+            transition: all 300ms cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        /* 隱藏原生 File Input */
+        .file-upload-input {
+            display: none;
+        }
+
+        /* 自訂美化 range 滑桿 */
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            background: transparent;
+        }
+        input[type="range"]::-webkit-slider-runnable-track {
+            background: #0f172a;
+            border: 1px solid #1e293b;
+            border-radius: 9999px;
+            height: 8px;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            margin-top: -5px;
+            background-color: currentColor;
+            border-radius: 9999px;
+            height: 16px;
+            width: 16px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+            cursor: pointer;
+            transition: transform 0.1s ease;
+        }
+        input[type="range"]::-webkit-slider-thumb:active {
+            transform: scale(1.3);
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans flex flex-col antialiased selection:bg-amber-500 selection:text-slate-950">
+
+    <!-- 頂部導覽列 -->
+    <header class="border-b border-slate-900 bg-slate-900/60 backdrop-blur sticky top-0 z-50 transition-all">
+        <div class="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row justify-between items-center gap-4">
+            <!-- LOGO 與標題區 -->
+            <div class="flex items-center gap-3 w-full justify-between sm:justify-start">
+                <div class="flex items-center gap-3">
+                    <!-- 圖片容器與雙重顯示機制 -->
+                    <div class="h-10 flex items-center justify-center overflow-hidden rounded-lg bg-white px-2 py-1 shadow-md shrink-0 min-w-[40px] relative">
+                        <!-- 本機圖片路徑：下載後放在同資料夾即可生效 -->
+                        <img 
+                            src="/static/logo.png" 
+                            alt="Hami Video Logo" 
+                            class="h-full w-auto object-contain relative z-10"
+                            onerror="this.style.display='none'; document.getElementById('fallback-logo').classList.remove('hidden');"
+                        />
+                        <!-- 線上預覽專用替代圖示 (避免預覽區破圖空白) -->
+                        <div id="fallback-logo" class="hidden h-full">
+                            <div class="flex items-center gap-1.5 h-full w-full">
+                                <div class="w-6 h-6 rounded-full bg-movieGreen flex items-center justify-center shadow-inner shrink-0">
+                                    <i data-lucide="play" class="w-3 h-3 text-white fill-white ml-0.5"></i>
+                                </div>
+                                <span class="text-slate-900 font-black italic text-sm leading-none tracking-tighter">Hami<br>Video</span>
+                            </div>
+                        </div>
+                    </div>
+                    <h1 class="text-2xl font-black tracking-wider bg-gradient-to-r from-white via-slate-100 to-slate-300 bg-clip-text text-transparent">
+                        電影評分搜尋網
+                    </h1>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-grow max-w-7xl w-full mx-auto px-4 py-6 sm:px-6 lg:px-8 space-y-6">
+
+        <!-- 預告與系統公告欄 -->
+        <section class="bg-gradient-to-r from-indigo-950/40 via-slate-900/60 to-slate-900/40 border border-indigo-500/20 rounded-2xl p-4 md:p-5 shadow-lg flex flex-col md:flex-row items-start md:items-center gap-4 relative overflow-hidden backdrop-blur-sm">
+            <!-- 左側高光飾條 -->
+            <div class="absolute left-0 top-0 bottom-0 w-1.5 bg-indigo-500 shadow-[0_0_15px_#6366f1]"></div>
+            
+            <!-- 公告 Icon 與標題 -->
+            <div class="flex items-center gap-3 shrink-0 min-w-[120px]">
+                <div class="p-2.5 bg-indigo-500/10 text-indigo-400 rounded-xl border border-indigo-500/20">
+                    <i data-lucide="bell-ring" class="w-6 h-6 animate-pulse"></i>
+                </div>
+                <span class="font-black tracking-widest text-lg text-indigo-300">最新情報</span>
+            </div>
+
+            <!-- 公告內容清單 (您未來可以直接在這裡修改文字) -->
+            <div class="flex-grow w-full pt-2 md:pt-0 md:pl-4 md:border-l md:border-slate-800">
+                <ul class="text-sm md:text-base text-slate-300 space-y-2 list-none">
+                    <li class="flex items-start md:items-center gap-2">
+                        <i data-lucide="sparkles" class="w-4 h-4 text-amber-400 shrink-0 mt-0.5 md:mt-0"></i>
+                        <span><strong class="text-slate-100">視覺大升級：</strong>系統字體與排版已全面放大，並修正了左上角 Hami Video 圖示顯示！</span>
+                    </li>
+                    <li class="flex items-start md:items-center gap-2">
+                        <i data-lucide="rocket" class="w-4 h-4 text-emerald-400 shrink-0 mt-0.5 md:mt-0"></i>
+                        <span><strong class="text-slate-100">下期開發預告：</strong>即將加入線上資料庫串接與「個人收藏片單」功能，敬請期待。</span>
+                    </li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- 搜尋與進階過濾器 -->
+        <section class="bg-slate-900/40 rounded-2xl p-5 border border-slate-900 shadow-md space-y-4 backdrop-blur-sm">
+            <div class="flex flex-col lg:flex-row gap-4">
+                <!-- 關鍵字搜尋與搜尋按鈕組合 -->
+                <div class="flex flex-col sm:flex-row gap-2 flex-grow">
+                    <div class="relative flex-grow">
+                        <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500">
+                            <i data-lucide="search" class="w-5 h-5"></i>
+                        </span>
+                        <input type="text" id="searchInput" placeholder="搜尋中文片名、英文片名、導演、演員..." class="w-full pl-10 pr-4 py-3 bg-slate-950 border border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500 text-base placeholder-slate-600 transition">
+                    </div>
+                    <!-- 實體搜尋按鈕 -->
+                    <button id="searchBtn" class="px-6 py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-bold rounded-xl transition flex items-center justify-center gap-2 shadow-md shadow-amber-500/10 shrink-0 text-base">
+                        <i data-lucide="sparkles" class="w-4 h-4 text-slate-950"></i>
+                        篩選
+                    </button>
+                </div>
+                
+                <!-- 排序選擇 -->
+                <div class="w-full lg:w-56">
+                    <select id="sortBy" class="w-full px-3 py-3 bg-slate-950 border border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500 text-base transition">
+                        <option value="none">✨ 預設排序</option>
+                        <option value="imdb_desc">⭐️ IMDb 評分：高到低</option>
+                        <option value="douban_desc">🍀 豆瓣評分：高到低</option>
+                        <option value="rt_desc">🍅 爛番茄番茄度：高到低</option>
+                        <option value="year_desc">📅 上映年份：最新優先</option>
+                        <option value="year_asc">📅 上映年份：最舊優先</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- 進階篩選抽屜 -->
+            <div class="space-y-5 pt-4 border-t border-slate-900">
+                <!-- 基礎分類篩選與快速重置 -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 items-end">
+                    <!-- 類型篩選 -->
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-400 mb-2 flex items-center gap-1">
+                            <i data-lucide="tag" class="w-4 h-4 text-amber-500"></i>電影類型
+                        </label>
+                        <select id="filterGenre" class="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-base focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500">
+                            <option value="all">所有類型 (全部)</option>
+                        </select>
+                    </div>
+
+                    <!-- 國家篩選 -->
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-400 mb-2 flex items-center gap-1">
+                            <i data-lucide="globe" class="w-4 h-4 text-blue-500"></i>國家/地區
+                        </label>
+                        <select id="filterCountry" class="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-base focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500">
+                            <option value="all">所有國家 (全部)</option>
+                        </select>
+                    </div>
+
+                    <!-- 快速清除篩選按鈕 -->
+                    <div class="flex justify-start sm:justify-end">
+                        <button id="clearFiltersBtn" class="flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-semibold bg-slate-950 hover:bg-slate-900 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-950 rounded-xl transition w-full sm:w-auto">
+                            <i data-lucide="filter-x" class="w-4 h-4"></i>
+                            重置篩選面板條件
+                        </button>
+                    </div>
+                </div>
+
+                <div class="pt-4 border-t border-slate-900/60">
+                    <p class="text-sm font-bold text-slate-300 mb-4 flex items-center gap-1.5">
+                        <i data-lucide="sliders-horizontal" class="w-4 h-4 text-amber-500 animate-pulse"></i> 各大平台最低評分臨界值 (極速無感過濾)
+                    </p>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-5">
+                        <!-- 1. IMDb 滑桿 -->
+                        <div class="text-amber-400">
+                            <label class="block text-sm font-semibold text-slate-400 mb-2 flex justify-between">
+                                <span>最低 IMDb 評分</span>
+                                <span id="minImdbLabel" class="font-bold text-amber-400">0.0</span>
+                            </label>
+                            <input type="range" id="filterMinImdb" min="0" max="10" step="0.5" value="0" class="w-full h-1.5 rounded-lg appearance-none cursor-pointer">
+                        </div>
+
+                        <!-- 2. 豆瓣滑桿 -->
+                        <div class="text-emerald-500">
+                            <label class="block text-sm font-semibold text-slate-400 mb-2 flex justify-between">
+                                <span>最低 豆瓣評分</span>
+                                <span id="minDoubanLabel" class="font-bold text-emerald-400">0.0</span>
+                            </label>
+                            <input type="range" id="filterMinDouban" min="0" max="10" step="0.5" value="0" class="w-full h-1.5 rounded-lg appearance-none cursor-pointer">
+                        </div>
+
+                        <!-- 3. 爛番茄新鮮度滑桿 -->
+                        <div class="text-rose-500">
+                            <label class="block text-sm font-semibold text-slate-400 mb-2 flex justify-between">
+                                <span>最低 爛番茄新鮮度</span>
+                                <span id="minRtLabel" class="font-bold text-rose-400">0%</span>
+                            </label>
+                            <input type="range" id="filterMinRt" min="0" max="100" step="5" value="0" class="w-full h-1.5 rounded-lg appearance-none cursor-pointer">
+                        </div>
+
+                        <!-- 4. 爛番茄觀眾評分滑桿 -->
+                        <div class="text-orange-500">
+                            <label class="block text-sm font-semibold text-slate-400 mb-2 flex justify-between">
+                                <span>最低 爛番茄觀眾分</span>
+                                <span id="minRtAudienceLabel" class="font-bold text-orange-400">0%</span>
+                            </label>
+                            <input type="range" id="filterMinRtAudience" min="0" max="100" step="5" value="0" class="w-full h-1.5 rounded-lg appearance-none cursor-pointer">
+                        </div>
+
+                        <!-- 5. Metacritic 滑桿 -->
+                        <div class="text-yellow-500">
+                            <label class="block text-sm font-semibold text-slate-400 mb-2 flex justify-between">
+                                <span>最低 Metacritic</span>
+                                <span id="minMcLabel" class="font-bold text-yellow-400">0</span>
+                            </label>
+                            <input type="range" id="filterMinMc" min="0" max="100" step="5" value="0" class="w-full h-1.5 rounded-lg appearance-none cursor-pointer">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 當前搜尋狀態說明與視圖切換 -->
+            <div class="flex flex-col sm:flex-row justify-between items-center pt-3 border-t border-slate-900 text-sm text-slate-400 gap-2">
+                <div id="resultsCount" class="font-medium">正在載入電影資料...</div>
+                
+                <div class="flex items-center gap-3">
+                    <!-- 視圖切換按鈕 -->
+                    <div class="flex bg-slate-950 border border-slate-800 rounded-lg p-0.5">
+                        <button id="viewGridBtn" class="p-2 rounded-md bg-slate-800 text-amber-500 shadow-sm transition" title="精緻卡片視圖">
+                            <i data-lucide="layout-grid" class="w-5 h-5"></i>
+                        </button>
+                        <button id="viewListBtn" class="p-2 rounded-md text-slate-500 hover:text-slate-300 transition" title="簡潔條列視圖">
+                            <i data-lucide="list" class="w-5 h-5"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 電影網格 / 清單 -->
+        <section>
+            <div id="moviesGrid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                <!-- 動態生成的電影卡片會置於此處 -->
+            </div>
+            
+            <!-- 無資料狀態 -->
+            <div id="emptyState" class="hidden text-center py-20 bg-slate-900/20 rounded-2xl border border-slate-900">
+                <div class="p-4 bg-slate-950/50 inline-block rounded-full mb-4">
+                    <i data-lucide="search-code" class="w-10 h-10 mx-auto text-slate-600"></i>
+                </div>
+                <h4 class="text-xl font-bold text-slate-300">未找到符合條件的電影</h4>
+                <p class="text-base text-slate-500 mt-2 max-w-sm mx-auto">請嘗試變更您的搜尋關鍵字、類型、國家或調降各大平台的最低評分門檻。</p>
+            </div>
+
+            <!-- 分頁控制器 -->
+            <div id="paginationContainer" class="flex justify-between items-center mt-10 pt-6 border-t border-slate-900">
+                <button id="prevPageBtn" class="px-5 py-2.5 bg-slate-900 hover:bg-slate-850 border border-slate-800 disabled:opacity-30 disabled:pointer-events-none text-base font-medium rounded-xl transition flex items-center gap-2">
+                    <i data-lucide="arrow-left" class="w-4 h-4"></i> 上一頁
+                </button>
+                <span id="pageIndicator" class="text-base text-slate-400 font-mono">頁碼：- / -</span>
+                <button id="nextPageBtn" class="px-5 py-2.5 bg-slate-900 hover:bg-slate-850 border border-slate-800 disabled:opacity-30 disabled:pointer-events-none text-base font-medium rounded-xl transition flex items-center gap-2">
+                    下一頁 <i data-lucide="arrow-right" class="w-4 h-4"></i>
+                </button>
+            </div>
+        </section>
+    </main>
+
+    <!-- 頁尾 -->
+    <footer class="border-t border-slate-900 bg-slate-950/80 mt-16 py-10 text-center text-sm text-slate-500">
+        <div class="max-w-7xl mx-auto px-4 space-y-3">
+            <p>電影評分搜尋與分析儀表板 © 2026. 隱私安全保證：所有解析、篩選與圖表運算皆在您的本地瀏覽器沙盒中完成，不會上傳任何個人數據。</p>
+            <p class="flex items-center justify-center gap-2 text-slate-600 text-xs flex-wrap">
+                <span class="flex items-center gap-1"><i data-lucide="code" class="w-4 h-4"></i> HTML5</span> • 
+                <span class="flex items-center gap-1"><i data-lucide="palette" class="w-4 h-4"></i> Tailwind CSS</span> • 
+                <span class="flex items-center gap-1"><i data-lucide="file-json" class="w-4 h-4"></i> PapaParse</span> • 
+                <span class="flex items-center gap-1"><i data-lucide="layout" class="w-4 h-4"></i> Lucide Icons</span>
+            </p>
+        </div>
+    </footer>
+
+    <!-- 自訂 Alert 視窗 -->
+    <div id="customAlert" class="fixed inset-0 flex items-center justify-center z-[100] bg-slate-950/80 backdrop-blur-md hidden opacity-0 transition-opacity duration-300">
+        <div class="bg-gradient-to-b from-slate-900 to-slate-950 border border-slate-800 p-6 rounded-2xl shadow-2xl max-w-md w-full mx-4 transform scale-95 transition-all duration-300">
+            <div class="flex items-start gap-4">
+                <div class="p-3 bg-amber-500/10 text-amber-500 rounded-xl shrink-0">
+                    <i data-lucide="info" class="w-6 h-6 animate-bounce"></i>
+                </div>
+                <div class="space-y-1.5 flex-1">
+                    <h4 class="text-lg font-bold text-white" id="alertTitle">提示</h4>
+                    <p class="text-base text-slate-400 leading-relaxed" id="alertMessage">提示內容</p>
+                </div>
+            </div>
+            <div class="mt-6 flex justify-end">
+                <button onclick="closeAlert()" class="px-5 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-bold text-base rounded-xl transition shadow-md shadow-amber-500/5">
+                    我知道了
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 2. 全域狀態
+        let filteredMovies = [];
+        let currentPage = 1;
+        const itemsPerPage = 30; 
+        let viewMode = 'card';
+        let totalItems = 0;
+
+        // 3. 初始化與事件繫結
+        window.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+            
+            // 載入元數據並執行首次搜尋
+            fetchMetadata().then(() => {
+                currentPage = 1;
+                triggerFilter(true);
+            });
+
+            // 註冊清除所有篩選條件
+            document.getElementById('clearFiltersBtn').addEventListener('click', () => {
+                resetFilters();
+                triggerFilter(true);
+            });
+
+            // 註冊搜尋與篩選事件
+            document.getElementById('searchBtn').addEventListener('click', () => triggerFilter(true));
+            
+            // 關鍵字搜尋防抖 (Debounce)
+            let debounceTimer;
+            document.getElementById('searchInput').addEventListener('input', () => {
+                clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => {
+                    triggerFilter(true);
+                }, 300);
+            }); 
+            document.getElementById('searchInput').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    clearTimeout(debounceTimer);
+                    triggerFilter(true);
+                }
+            });
+
+            document.getElementById('sortBy').addEventListener('change', () => triggerFilter(true));
+            document.getElementById('filterGenre').addEventListener('change', () => triggerFilter(true));
+            document.getElementById('filterCountry').addEventListener('change', () => triggerFilter(true));
+            
+            // 各大評分滑動條事件註冊
+            setupSlider('filterMinImdb', 'minImdbLabel', '', false);
+            setupSlider('filterMinDouban', 'minDoubanLabel', '', false);
+            setupSlider('filterMinRt', 'minRtLabel', '%', true);
+            setupSlider('filterMinRtAudience', 'minRtAudienceLabel', '%', true);
+            setupSlider('filterMinMc', 'minMcLabel', '', true);
+
+            // 分頁按鈕
+            document.getElementById('prevPageBtn').addEventListener('click', () => {
+                if (currentPage > 1) {
+                    currentPage--;
+                    triggerFilter(false);
+                }
+            });
+            document.getElementById('nextPageBtn').addEventListener('click', () => {
+                const totalPages = Math.ceil(totalItems / itemsPerPage);
+                if (currentPage < totalPages) {
+                    currentPage++;
+                    triggerFilter(false);
+                }
+            });
+
+            // 視圖切換
+            document.getElementById('viewGridBtn').addEventListener('click', () => setViewMode('card'));
+            document.getElementById('viewListBtn').addEventListener('click', () => setViewMode('list'));
+        });
+
+        // 美化 Slider 的通用小工具
+        function setupSlider(sliderId, labelId, suffix = '', isInt = false) {
+            const slider = document.getElementById(sliderId);
+            const label = document.getElementById(labelId);
+            slider.addEventListener('input', (e) => {
+                const val = isInt ? Math.round(e.target.value) : parseFloat(e.target.value).toFixed(1);
+                label.innerText = val + suffix;
+                triggerFilter(true);
+            });
+        }
+
+        // 切換視圖模式
+        function setViewMode(mode) {
+            if (viewMode === mode) return;
+            viewMode = mode;
+            
+            const gridBtn = document.getElementById('viewGridBtn');
+            const listBtn = document.getElementById('viewListBtn');
+
+            if (mode === 'card') {
+                gridBtn.className = 'p-2 rounded-md bg-slate-800 text-amber-500 shadow-sm transition';
+                listBtn.className = 'p-2 rounded-md text-slate-500 hover:text-slate-300 transition';
+            } else {
+                listBtn.className = 'p-2 rounded-md bg-slate-800 text-amber-500 shadow-sm transition';
+                gridBtn.className = 'p-2 rounded-md text-slate-500 hover:text-slate-300 transition';
+            }
+            
+            renderMovies();
+        }
+
+        // 4. 重置所有篩選器數值
+        function resetFilters() {
+            document.getElementById('searchInput').value = '';
+            document.getElementById('sortBy').value = 'none';
+            document.getElementById('filterGenre').value = 'all';
+            document.getElementById('filterCountry').value = 'all';
+            
+            document.getElementById('filterMinImdb').value = 0;
+            document.getElementById('minImdbLabel').innerText = '0.0';
+            
+            document.getElementById('filterMinDouban').value = 0;
+            document.getElementById('minDoubanLabel').innerText = '0.0';
+            
+            document.getElementById('filterMinRt').value = 0;
+            document.getElementById('minRtLabel').innerText = '0%';
+            
+            document.getElementById('filterMinRtAudience').value = 0;
+            document.getElementById('minRtAudienceLabel').innerText = '0%';
+            
+            document.getElementById('filterMinMc').value = 0;
+            document.getElementById('minMcLabel').innerText = '0';
+        }
+
+        // 5. 元數據載入與選單生成
+        async function fetchMetadata() {
+            try {
+                const response = await fetch('/api/v1/movies/meta');
+                const data = await response.json();
+                if (data.success) {
+                    populateFilterOptions(data.genres, data.countries);
+                }
+            } catch (err) {
+                console.error('Failed to fetch metadata:', err);
+            }
+        }
+
+        function populateFilterOptions(genres, countries) {
+            const genreSelect = document.getElementById('filterGenre');
+            genreSelect.innerHTML = '<option value="all">所有類型 (全部)</option>';
+            genres.forEach(g => {
+                if(g) genreSelect.innerHTML += `<option value="${g}">${g}</option>`;
+            });
+
+            const countrySelect = document.getElementById('filterCountry');
+            countrySelect.innerHTML = '<option value="all">所有國家 (全部)</option>';
+            countries.forEach(c => {
+                if(c) countrySelect.innerHTML += `<option value="${c}">${c}</option>`;
+            });
+        }
+
+        // 6. 過濾並從後端 API 取得資料
+        async function triggerFilter(resetPage = true) {
+            if (resetPage) {
+                currentPage = 1;
+            }
+            const query = document.getElementById('searchInput').value.trim();
+            const sortBy = document.getElementById('sortBy').value;
+            const targetGenre = document.getElementById('filterGenre').value;
+            const targetCountry = document.getElementById('filterCountry').value;
+            
+            // 讀取過濾閥值
+            const minImdb = parseFloat(document.getElementById('filterMinImdb').value);
+            const minDouban = parseFloat(document.getElementById('filterMinDouban').value);
+            const minRt = parseInt(document.getElementById('filterMinRt').value);
+            const minRtAudience = parseInt(document.getElementById('filterMinRtAudience').value);
+            const minMc = parseInt(document.getElementById('filterMinMc').value);
+
+            // 建立 URL Query 參數
+            const params = new URLSearchParams();
+            if (query) params.append('keyword', query);
+            if (targetGenre && targetGenre !== 'all') params.append('genre', targetGenre);
+            if (targetCountry && targetCountry !== 'all') params.append('country', targetCountry);
+            if (minImdb > 0) params.append('min_imdb', minImdb);
+            if (minDouban > 0) params.append('min_douban', minDouban);
+            if (minRt > 0) params.append('min_rt', minRt);
+            if (minRtAudience > 0) params.append('min_rt_audience', minRtAudience);
+            if (minMc > 0) params.append('min_mc', minMc);
+            if (sortBy !== 'none') params.append('sort_by', sortBy);
+            params.append('page', currentPage);
+            params.append('limit', itemsPerPage);
+
+            const resultsCountEl = document.getElementById('resultsCount');
+            resultsCountEl.innerText = '正在搜尋電影資料...';
+
+            try {
+                const response = await fetch(`/api/v1/movies/search?${params.toString()}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Map backend fields to frontend UI expectation
+                    filteredMovies = data.results.map(m => ({
+                        titleCn: m.title_zh || '未命名電影',
+                        titleEn: m.title_en || '',
+                        genre: (m.genres || []).join(', ') || '未分類',
+                        country: (m.countries || []).join(', ') || '未知',
+                        year: m.year,
+                        director: (m.directors || []).join(', ') || '未知',
+                        actors: (m.actors || []).join(', ') || '',
+                        imdbId: m.imdb_id || '',
+                        rtTomatometer: m.rt_tomatometer,
+                        rtAudience: m.rt_audience_score,
+                        doubanRating: m.douban_rating,
+                        imdbRating: m.imdb_rating,
+                        metacritic: m.metacritic_rating
+                    }));
+
+                    totalItems = data.total;
+                    resultsCountEl.innerText = `已篩選出 ${totalItems} 筆結果`;
+                    renderMovies();
+                } else {
+                    showAlert('搜尋失敗', '伺服器回傳錯誤。');
+                }
+            } catch (err) {
+                console.error(err);
+                resultsCountEl.innerText = '連線失敗，請稍後再試。';
+            }
+        }
+
+        // 7. 負責渲染電影卡片的邏輯
+        function renderMovies() {
+            const grid = document.getElementById('moviesGrid');
+            const emptyState = document.getElementById('emptyState');
+            grid.innerHTML = '';
+
+            if (filteredMovies.length === 0) {
+                grid.classList.add('hidden');
+                emptyState.classList.remove('hidden');
+                document.getElementById('paginationContainer').classList.add('hidden');
+                return;
+            }
+
+            grid.classList.remove('hidden');
+            emptyState.classList.add('hidden');
+            document.getElementById('paginationContainer').classList.remove('hidden');
+
+            const totalPages = Math.ceil(totalItems / itemsPerPage);
+            document.getElementById('pageIndicator').innerText = `頁碼：${currentPage} / ${totalPages}`;
+            
+            document.getElementById('prevPageBtn').disabled = (currentPage === 1);
+            document.getElementById('nextPageBtn').disabled = (currentPage === totalPages);
+
+            // 根據視圖模式設定容器的 class
+            if (viewMode === 'card') {
+                grid.className = 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6';
+            } else {
+                grid.className = 'flex flex-col gap-3';
+            }
+
+            const pageMovies = filteredMovies;
+
+            pageMovies.forEach(m => {
+                let ratingBadgesHtml = '';
+                let visualBarsHtml = '';
+
+                // 1. IMDb 標章與視覺條
+                if (m.imdbRating !== null) {
+                    ratingBadgesHtml += `
+                        <div class="flex items-center gap-1.5 bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-1 rounded-lg text-sm font-bold shadow-neon-gold" title="IMDb 評分">
+                            <span class="bg-amber-400 text-slate-950 px-1 rounded-sm text-xs font-black mr-0.5">IMDb</span>
+                            <span>${m.imdbRating.toFixed(1)}</span>
+                        </div>`;
+                    visualBarsHtml += `
+                        <div class="space-y-1">
+                            <div class="flex justify-between text-xs text-slate-400">
+                                <span class="font-medium">IMDb</span>
+                                <span class="text-amber-400 font-bold">${m.imdbRating.toFixed(1)}/10</span>
+                            </div>
+                            <div class="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden border border-slate-900">
+                                <div class="bg-amber-400 h-full rounded-full" style="width: ${m.imdbRating * 10}%"></div>
+                            </div>
+                        </div>`;
+                }
+
+                // 2. 豆瓣標章與視覺條
+                if (m.doubanRating !== null) {
+                    ratingBadgesHtml += `
+                        <div class="flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-1 rounded-lg text-sm font-bold shadow-neon-green" title="豆瓣評分">
+                            <span class="text-emerald-500 text-xs font-black mr-0.5">豆瓣</span>
+                            <span>${m.doubanRating.toFixed(1)}</span>
+                        </div>`;
+                    visualBarsHtml += `
+                        <div class="space-y-1">
+                            <div class="flex justify-between text-xs text-slate-400">
+                                <span class="font-medium">豆瓣</span>
+                                <span class="text-emerald-400 font-bold">${m.doubanRating.toFixed(1)}/10</span>
+                            </div>
+                            <div class="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden border border-slate-900">
+                                <div class="bg-emerald-500 h-full rounded-full" style="width: ${m.doubanRating * 10}%"></div>
+                            </div>
+                        </div>`;
+                }
+
+                // 3. 爛番茄新鮮度 與視覺條
+                if (m.rtTomatometer !== null) {
+                    ratingBadgesHtml += `
+                        <div class="flex items-center gap-1.5 bg-rose-500/10 text-rose-400 border border-rose-500/20 px-2 py-1 rounded-lg text-sm font-bold shadow-neon-red" title="爛番茄專業影評度">
+                            <span class="text-xs mr-0.5">🍅</span>
+                            <span>${m.rtTomatometer}%</span>
+                        </div>`;
+                    visualBarsHtml += `
+                        <div class="space-y-1">
+                            <div class="flex justify-between text-xs text-slate-400">
+                                <span class="font-medium">爛番茄新鮮度</span>
+                                <span class="text-rose-400 font-bold">${m.rtTomatometer}%</span>
+                            </div>
+                            <div class="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden border border-slate-900">
+                                <div class="bg-rose-500 h-full rounded-full" style="width: ${m.rtTomatometer}%"></div>
+                            </div>
+                        </div>`;
+                }
+
+                // 4. 爛番茄觀眾分 與視覺條
+                if (m.rtAudience !== null) {
+                    ratingBadgesHtml += `
+                        <div class="flex items-center gap-1.5 bg-orange-500/10 text-orange-400 border border-orange-500/20 px-2 py-1 rounded-lg text-sm font-bold" title="爛番茄觀眾爆米花指數">
+                            <span class="text-xs mr-0.5">🍿</span>
+                            <span>${m.rtAudience}%</span>
+                        </div>`;
+                    visualBarsHtml += `
+                        <div class="space-y-1">
+                            <div class="flex justify-between text-xs text-slate-400">
+                                <span class="font-medium">爛番茄觀眾分</span>
+                                <span class="text-orange-400 font-bold">${m.rtAudience}%</span>
+                            </div>
+                            <div class="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden border border-slate-900">
+                                <div class="bg-orange-500 h-full rounded-full" style="width: ${m.rtAudience}%"></div>
+                            </div>
+                        </div>`;
+                }
+
+                // 5. Metacritic 與視覺條
+                if (m.metacritic !== null) {
+                    ratingBadgesHtml += `
+                        <div class="flex items-center gap-1.5 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-1 rounded-lg text-sm font-bold" title="Metacritic 綜合影評">
+                            <span class="bg-indigo-500 text-white px-1 rounded-sm text-xs font-black mr-0.5">MC</span>
+                            <span>${m.metacritic}</span>
+                        </div>`;
+                    visualBarsHtml += `
+                        <div class="space-y-1">
+                            <div class="flex justify-between text-xs text-slate-400">
+                                <span class="font-medium">Metacritic</span>
+                                <span class="text-indigo-400 font-bold">${m.metacritic}/100</span>
+                            </div>
+                            <div class="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden border border-slate-900">
+                                <div class="bg-indigo-500 h-full rounded-full" style="width: ${m.metacritic}%"></div>
+                            </div>
+                        </div>`;
+                }
+
+                if (ratingBadgesHtml === '') {
+                    ratingBadgesHtml = `<span class="text-sm text-slate-500 italic bg-slate-950 px-2 py-1 rounded-lg border border-slate-900">暫無評分數據</span>`;
+                }
+
+                let itemHtml = '';
+
+                if (viewMode === 'card') {
+                    itemHtml = `
+                        <div class="bg-gradient-to-b from-slate-900/60 to-slate-950/90 border border-slate-900 hover:border-slate-800 rounded-2xl p-5 flex flex-col justify-between transition-all-300 hover:-translate-y-1.5 shadow-md hover:shadow-2xl hover:shadow-amber-500/5 group relative overflow-hidden">
+                            <div class="absolute inset-0 bg-gradient-to-t from-slate-950/40 via-transparent to-transparent pointer-events-none"></div>
+                            
+                            <!-- 頂部類別、國家、年份 -->
+                            <div class="space-y-3.5 z-10">
+                                <div class="flex justify-between items-start gap-2">
+                                    <span class="px-2.5 py-0.5 bg-slate-950/80 border border-slate-800 text-slate-300 text-xs font-bold rounded-full uppercase tracking-wider">${m.genre}</span>
+                                    <span class="text-sm text-slate-500 font-medium">${m.country} ${m.year ? `• ${m.year}年` : ''}</span>
+                                </div>
+                                
+                                <!-- 片名資訊 -->
+                                <div>
+                                    <h3 class="text-lg font-bold text-slate-100 group-hover:text-amber-400 transition-colors line-clamp-1">${m.titleCn}</h3>
+                                    <p class="text-sm text-slate-500 italic line-clamp-1 mt-0.5">${m.titleEn || '&nbsp;'}</p>
+                                </div>
+
+                                <!-- 評分徽章區 -->
+                                <div class="flex flex-wrap gap-1.5 pt-1">
+                                    ${ratingBadgesHtml}
+                                </div>
+
+                                <!-- 視覺化評分進度條區 -->
+                                ${visualBarsHtml ? `<div class="grid grid-cols-2 gap-x-4 gap-y-3 pt-2">${visualBarsHtml}</div>` : ''}
+
+                                <hr class="border-slate-900 my-2">
+
+                                <!-- 導演與演員資訊 -->
+                                <div class="space-y-1.5 text-sm text-slate-400">
+                                    <p class="line-clamp-1"><strong class="text-slate-300">導演：</strong>${m.director}</p>
+                                    <p class="line-clamp-2"><strong class="text-slate-300">演員：</strong>${m.actors || '未登記演員'}</p>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    itemHtml = `
+                        <div class="bg-slate-900/40 border border-slate-900 hover:border-slate-800 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between transition-all duration-200 hover:bg-slate-900/80 group gap-4">
+                            <!-- 左側：標題、分類與人員資訊 -->
+                            <div class="flex-grow min-w-0">
+                                <div class="flex items-center gap-2 mb-1.5 flex-wrap">
+                                    <span class="px-2 py-0.5 bg-slate-950 text-slate-300 text-xs font-bold rounded-full border border-slate-900 uppercase tracking-wider whitespace-nowrap">${m.genre}</span>
+                                    <h3 class="text-lg font-bold text-slate-100 group-hover:text-amber-400 transition-colors truncate">${m.titleCn}</h3>
+                                    <span class="text-sm text-slate-500 font-medium whitespace-nowrap">${m.year ? `${m.year}年` : ''}</span>
+                                    <span class="text-sm text-slate-500 font-medium whitespace-nowrap ml-auto md:ml-0 px-2 py-0.5 border border-slate-900 rounded-md bg-slate-950">${m.country}</span>
+                                </div>
+                                <p class="text-sm text-slate-500 italic truncate mb-2.5">${m.titleEn || '&nbsp;'}</p>
+                                <div class="text-xs text-slate-400 truncate space-x-2">
+                                    <span><strong class="text-slate-300">導演：</strong>${m.director}</span>
+                                    <span class="text-slate-700">|</span>
+                                    <span><strong class="text-slate-300">演員：</strong>${m.actors || '未登記演員'}</span>
+                                </div>
+                            </div>
+                            
+                            <!-- 右側：評分徽章區 -->
+                            <div class="flex flex-wrap md:flex-nowrap items-center gap-2 shrink-0">
+                                ${ratingBadgesHtml}
+                            </div>
+                        </div>
+                    `;
+                }
+                grid.innerHTML += itemHtml;
+            });
+
+            lucide.createIcons();
+        }
+
+        // 8. 自訂 Alert 視窗
+        function showAlert(title, message) {
+            const alertBg = document.getElementById('customAlert');
+            const alertCard = alertBg.querySelector('div');
+            
+            document.getElementById('alertTitle').innerText = title;
+            document.getElementById('alertMessage').innerText = message;
+
+            alertBg.classList.remove('hidden');
+            setTimeout(() => {
+                alertBg.classList.remove('opacity-0');
+                alertCard.classList.remove('scale-95');
+            }, 10);
+        }
+
+        function closeAlert() {
+            const alertBg = document.getElementById('customAlert');
+            const alertCard = alertBg.querySelector('div');
+            
+            alertBg.classList.add('opacity-0');
+            alertCard.classList.add('scale-95');
+            setTimeout(() => {
+                alertBg.classList.add('hidden');
+            }, 300);
+        }
+    </script>
+</body>
+</html>

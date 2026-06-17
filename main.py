@@ -20,6 +20,8 @@ import pandas as pd
 from pydantic import BaseModel, HttpUrl
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from google.cloud import firestore
 from dotenv import load_dotenv
 
@@ -49,6 +51,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount Static Files (hosted at /static)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 # Initialize Firestore Client
 init_error = None
 try:
@@ -60,8 +65,59 @@ except Exception as e:
     print(f"[Warning] Failed to initialize Firestore: {e}")
     db = None
 
+# Global Cache Variables
+MOVIES_CACHE = []
+GENRES_CACHE = []
+COUNTRIES_CACHE = []
+
+def load_cache():
+    global MOVIES_CACHE, GENRES_CACHE, COUNTRIES_CACHE
+    if db is None:
+        print("[Warning] Firestore client is not initialized. Cache loading skipped.")
+        return
+    print("Loading movie cache from Firestore...")
+    try:
+        movies_ref = db.collection("movies")
+        docs = movies_ref.stream()
+        
+        movies = []
+        genres_set = set()
+        countries_set = set()
+        
+        for doc in docs:
+            data = doc.to_dict()
+            data["id"] = doc.id
+            if "created_at" in data and data["created_at"]:
+                data["created_at"] = data["created_at"].isoformat()
+            if "updated_at" in data and data["updated_at"]:
+                data["updated_at"] = data["updated_at"].isoformat()
+            
+            movies.append(data)
+            
+            # Extract genres and countries
+            for g in data.get("genres", []):
+                if g:
+                    genres_set.add(g.strip())
+            for c in data.get("countries", []):
+                if c:
+                    countries_set.add(c.strip())
+                    
+        MOVIES_CACHE = movies
+        GENRES_CACHE = sorted(list(genres_set))
+        COUNTRIES_CACHE = sorted(list(countries_set))
+        print(f"Cache successfully loaded: {len(MOVIES_CACHE)} movies, {len(GENRES_CACHE)} genres, {len(COUNTRIES_CACHE)} countries.")
+    except Exception as e:
+        print(f"[Error] Failed to load cache: {e}")
+
+@app.on_event("startup")
+async def startup_event():
+    load_cache()
 
 @app.get("/")
+async def read_index():
+    """Serve index.html at root."""
+    return FileResponse("static/index.html")
+
 @app.get("/health")
 async def health_check():
     """Health check route for GCP Cloud Run startup/liveness probes."""
@@ -76,123 +132,124 @@ async def health_check():
         "status": "healthy",
         "message": "FastAPI service is online and connected to Firestore.",
         "database_connected": True,
-        "project_id": db.project
+        "project_id": db.project,
+        "cached_movies_count": len(MOVIES_CACHE)
     }
 
 
 @app.get("/api/v1/movies/search")
 async def search_movies(
-    keyword: Optional[str] = Query(None, description="Fuzzy search keyword for movie's Chinese title"),
-    genre: Optional[str] = Query(None, description="Filter by movie genre (exact match in genres list, e.g. 動作)"),
-    page: int = Query(1, ge=1, description="Page number (starts at 1)"),
-    limit: int = Query(20, ge=1, le=100, description="Number of results per page (default: 20, max: 100)")
+    keyword: Optional[str] = Query(None, description="Fuzzy search keyword for title, directors, or actors"),
+    genre: Optional[str] = Query(None, description="Filter by movie genre"),
+    country: Optional[str] = Query(None, description="Filter by movie country"),
+    min_imdb: Optional[float] = Query(None, description="Minimum IMDb rating"),
+    min_douban: Optional[float] = Query(None, description="Minimum Douban rating"),
+    min_rt: Optional[int] = Query(None, description="Minimum Rotten Tomatoes Tomatometer rating"),
+    min_rt_audience: Optional[int] = Query(None, description="Minimum Rotten Tomatoes Audience rating"),
+    min_mc: Optional[int] = Query(None, description="Minimum Metacritic rating"),
+    sort_by: str = Query("none", description="Sort criteria"),
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(20, ge=1, le=100, description="Items per page")
 ):
     """
-    Search and filter movies from Firestore 'movies' collection.
-    
-    Query Logic:
-    1. If `keyword` is provided: Queries 'search_keywords' array using 'array_contains'.
-       If `genre` is also provided, filters results in-memory.
-    2. If `genre` is provided (but no keyword): Queries 'genres' array using 'array_contains' in Firestore.
-    3. If neither is provided: Fetches movies ordered by updated_at descending.
-    
-    Results are sorted by rating (imdb_rating) descending and release year descending in-memory to provide premium search UX.
+    Search and filter movies from the in-memory cache.
+    Provides sub-millisecond, highly-responsive filtering and sorting.
     """
-    if db is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Firestore Database is not initialized. Please verify credentials."
-        )
+    # Filter the MOVIES_CACHE list
+    filtered = list(MOVIES_CACHE)
+    
+    # 1. Keyword search (fuzzy case-insensitive match on Chinese title, English title, directors, actors)
+    if keyword:
+        kw = keyword.strip().lower()
+        filtered = [
+            m for m in filtered
+            if (m.get("title_zh") and kw in m["title_zh"].lower()) or
+               (m.get("title_en") and kw in m["title_en"].lower()) or
+               (m.get("directors") and any(kw in d.lower() for d in m["directors"])) or
+               (m.get("actors") and any(kw in a.lower() for a in m["actors"]))
+        ]
+        
+    # 2. Genre filter
+    if genre and genre != "all":
+        genre_clean = genre.strip()
+        filtered = [
+            m for m in filtered
+            if m.get("genres") and genre_clean in m["genres"]
+        ]
+        
+    # 3. Country filter
+    if country and country != "all":
+        country_clean = country.strip()
+        filtered = [
+            m for m in filtered
+            if m.get("countries") and country_clean in m["countries"]
+        ]
+        
+    # 4. Rating thresholds
+    if min_imdb is not None and min_imdb > 0:
+        filtered = [
+            m for m in filtered
+            if m.get("imdb_rating") is not None and m["imdb_rating"] >= min_imdb
+        ]
+    if min_douban is not None and min_douban > 0:
+        filtered = [
+            m for m in filtered
+            if m.get("douban_rating") is not None and m["douban_rating"] >= min_douban
+        ]
+    if min_rt is not None and min_rt > 0:
+        filtered = [
+            m for m in filtered
+            if m.get("rt_tomatometer") is not None and m["rt_tomatometer"] >= min_rt
+        ]
+    if min_rt_audience is not None and min_rt_audience > 0:
+        filtered = [
+            m for m in filtered
+            if m.get("rt_audience_score") is not None and m["rt_audience_score"] >= min_rt_audience
+        ]
+    if min_mc is not None and min_mc > 0:
+        filtered = [
+            m for m in filtered
+            if m.get("metacritic_rating") is not None and m["metacritic_rating"] >= min_mc
+        ]
+        
+    # 5. Sorting
+    if sort_by == "imdb_desc":
+        filtered.sort(key=lambda x: x.get("imdb_rating") or 0.0, reverse=True)
+    elif sort_by == "douban_desc":
+        filtered.sort(key=lambda x: x.get("douban_rating") or 0.0, reverse=True)
+    elif sort_by == "rt_desc":
+        filtered.sort(key=lambda x: x.get("rt_tomatometer") or 0.0, reverse=True)
+    elif sort_by == "year_desc":
+        filtered.sort(key=lambda x: x.get("year") or 0, reverse=True)
+    elif sort_by == "year_asc":
+        filtered.sort(key=lambda x: x.get("year") if x.get("year") is not None else 9999)
+    else:
+        # Default sorting: IMDb rating desc, then release year desc
+        filtered.sort(key=lambda x: (x.get("imdb_rating") or 0.0, x.get("year") or 0), reverse=True)
 
-    try:
-        movies_ref = db.collection("movies")
-        results = []
+    # 6. Pagination
+    total = len(filtered)
+    start_idx = (page - 1) * limit
+    end_idx = start_idx + limit
+    paginated = filtered[start_idx:end_idx]
 
-        # Helper to format and serialize Firestore documents
-        def format_doc(doc):
-            data = doc.to_dict()
-            data["id"] = doc.id
-            # ISO format date strings for JSON compatibility
-            if "created_at" in data and data["created_at"]:
-                data["created_at"] = data["created_at"].isoformat()
-            if "updated_at" in data and data["updated_at"]:
-                data["updated_at"] = data["updated_at"].isoformat()
-            return data
+    return {
+        "success": True,
+        "page": page,
+        "limit": limit,
+        "total": total,
+        "results": paginated
+    }
 
-        # ----------------------------------------------------
-        # Scenario 1: Keyword-based Search (Fuzzy Title Match)
-        # ----------------------------------------------------
-        if keyword:
-            keyword_clean = keyword.strip()
-            # Perform array-contains lookup on ngram index using modern FieldFilter syntax
-            query = movies_ref.where(filter=firestore.FieldFilter("search_keywords", "array_contains", keyword_clean))
-            docs = query.stream()
 
-            for doc in docs:
-                data = format_doc(doc)
-                # Apply secondary filtering in-memory for genre if specified
-                if genre:
-                    genres_list = data.get("genres", [])
-                    if genre in genres_list:
-                        results.append(data)
-                else:
-                    results.append(data)
-
-            # Sort results in-memory (sort by imdb_rating descending, then year descending)
-            # Handle possible None values in sorting fields gracefully
-            results.sort(
-                key=lambda x: (x.get("imdb_rating") or 0.0, x.get("year") or 0),
-                reverse=True
-            )
-
-            # In-memory Pagination
-            total_items = len(results)
-            start_idx = (page - 1) * limit
-            end_idx = start_idx + limit
-            paginated_results = results[start_idx:end_idx]
-
-        # ----------------------------------------------------
-        # Scenario 2: Genre-based Search Only (No Keyword)
-        # ----------------------------------------------------
-        elif genre:
-            genre_clean = genre.strip()
-            # Query by genre (exact match in array) using modern FieldFilter syntax
-            query = movies_ref.where(filter=firestore.FieldFilter("genres", "array_contains", genre_clean))
-            
-            # Since Firestore does pagination on serverside, apply limit and offset
-            offset = (page - 1) * limit
-            query_paginated = query.limit(limit).offset(offset)
-            docs = query_paginated.stream()
-            
-            paginated_results = [format_doc(doc) for doc in docs]
-            total_items = None  # Offset queries do not easily expose total count without a separate count query
-
-        # ----------------------------------------------------
-        # Scenario 3: Retrieve All (No Keyword and No Genre)
-        # ----------------------------------------------------
-        else:
-            # Query all ordered by updated_at descending
-            query = movies_ref.order_by("updated_at", direction=firestore.Query.DESCENDING)
-            offset = (page - 1) * limit
-            query_paginated = query.limit(limit).offset(offset)
-            docs = query_paginated.stream()
-            
-            paginated_results = [format_doc(doc) for doc in docs]
-            total_items = None
-
-        return {
-            "success": True,
-            "page": page,
-            "limit": limit,
-            "total": total_items,
-            "results": paginated_results
-        }
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database query failed: {str(e)}"
-        )
+@app.get("/api/v1/movies/meta")
+async def get_movies_meta():
+    """Return the list of all unique genres and countries for dropdown menus."""
+    return {
+        "success": True,
+        "genres": GENRES_CACHE,
+        "countries": COUNTRIES_CACHE
+    }
 
 
 # N-gram helper and cleaning functions copied from importer for `/sync` route
@@ -403,6 +460,9 @@ async def sync_movies(payload: Optional[SyncRequest] = None):
         except Exception as commit_err:
             print(f"[Error] Failed to commit final sync batch: {commit_err}")
             errors_count += batch_counter
+
+    # Reload the cache with the newly updated Firestore records
+    load_cache()
 
     return {
         "success": True,
