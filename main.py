@@ -19,6 +19,13 @@ from dotenv import load_dotenv
 # Load local environment variables (useful for local development)
 load_dotenv()
 
+# Self-healing check: If credentials path is set but file doesn't exist, clear it
+# to allow GCP Application Default Credentials (ADC) auto-discovery in Cloud Run.
+credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+if credentials_path and not os.path.exists(credentials_path):
+    print(f"[Info] GOOGLE_APPLICATION_CREDENTIALS file '{credentials_path}' not found locally. Clearing env var to fallback to GCP Default Credentials.")
+    del os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
+
 # Initialize FastAPI App
 app = FastAPI(
     title="Movie Search API",
