@@ -36,12 +36,13 @@ app.add_middleware(
 )
 
 # Initialize Firestore Client
-# Locally, it will fetch GOOGLE_APPLICATION_CREDENTIALS from .env or system environment.
-# On GCP Cloud Run, it automatically authenticates using the service account assigned to the Cloud Run service.
+init_error = None
 try:
     db = firestore.Client()
     print(f"Firestore initialized successfully. GCP Project: {db.project}")
 except Exception as e:
+    import traceback
+    init_error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
     print(f"[Warning] Failed to initialize Firestore: {e}")
     db = None
 
@@ -54,7 +55,8 @@ async def health_check():
         return {
             "status": "warning",
             "message": "API is online, but Firestore is not initialized.",
-            "database_connected": False
+            "database_connected": False,
+            "error": init_error
         }
     return {
         "status": "healthy",
