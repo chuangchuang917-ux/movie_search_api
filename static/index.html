@@ -157,6 +157,7 @@
                         <option value="imdb_desc">⭐️ IMDb 評分：高到低</option>
                         <option value="douban_desc">🍀 豆瓣評分：高到低</option>
                         <option value="rt_desc">🍅 爛番茄番茄度：高到低</option>
+                        <option value="hami_desc">📺 Hami 評分：高到低</option>
                         <option value="year_desc">📅 上映年份：最新優先</option>
                         <option value="year_asc">📅 上映年份：最舊優先</option>
                     </select>
@@ -200,7 +201,7 @@
                     <p class="text-sm font-bold text-slate-300 mb-4 flex items-center gap-1.5">
                         <i data-lucide="sliders-horizontal" class="w-4 h-4 text-amber-500 animate-pulse"></i> 各大平台最低評分臨界值
                     </p>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-5">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-5">
                         <!-- 1. IMDb 滑桿 -->
                         <div class="text-amber-400">
                             <label class="block text-sm font-semibold text-slate-400 mb-2 flex justify-between">
@@ -244,6 +245,15 @@
                                 <span id="minMcLabel" class="font-bold text-yellow-400">0</span>
                             </label>
                             <input type="range" id="filterMinMc" min="0" max="100" step="5" value="0" class="w-full h-1.5 rounded-lg appearance-none cursor-pointer">
+                        </div>
+
+                        <!-- 6. Hami 滑桿 -->
+                        <div class="text-cyan-500">
+                            <label class="block text-sm font-semibold text-slate-400 mb-2 flex justify-between">
+                                <span>最低 Hami 評分</span>
+                                <span id="minHamiLabel" class="font-bold text-cyan-400">0.0</span>
+                            </label>
+                            <input type="range" id="filterMinHami" min="0" max="10" step="0.5" value="0" class="w-full h-1.5 rounded-lg appearance-none cursor-pointer">
                         </div>
                     </div>
                 </div>
@@ -380,6 +390,7 @@
             setupSlider('filterMinRt', 'minRtLabel', '%', true);
             setupSlider('filterMinRtAudience', 'minRtAudienceLabel', '%', true);
             setupSlider('filterMinMc', 'minMcLabel', '', true);
+            setupSlider('filterMinHami', 'minHamiLabel', '', false);
 
             // 分頁按鈕
             document.getElementById('prevPageBtn').addEventListener('click', () => {
@@ -452,6 +463,9 @@
             
             document.getElementById('filterMinMc').value = 0;
             document.getElementById('minMcLabel').innerText = '0';
+            
+            document.getElementById('filterMinHami').value = 0;
+            document.getElementById('minHamiLabel').innerText = '0.0';
         }
 
         // 5. 元數據載入與選單生成
@@ -497,6 +511,7 @@
             const minRt = parseInt(document.getElementById('filterMinRt').value);
             const minRtAudience = parseInt(document.getElementById('filterMinRtAudience').value);
             const minMc = parseInt(document.getElementById('filterMinMc').value);
+            const minHami = parseFloat(document.getElementById('filterMinHami').value);
 
             // 建立 URL Query 參數
             const params = new URLSearchParams();
@@ -508,6 +523,7 @@
             if (minRt > 0) params.append('min_rt', minRt);
             if (minRtAudience > 0) params.append('min_rt_audience', minRtAudience);
             if (minMc > 0) params.append('min_mc', minMc);
+            if (minHami > 0) params.append('min_hami', minHami);
             if (sortBy !== 'none') params.append('sort_by', sortBy);
             params.append('page', currentPage);
             params.append('limit', itemsPerPage);
@@ -534,7 +550,9 @@
                         rtAudience: m.rt_audience_score,
                         doubanRating: m.douban_rating,
                         imdbRating: m.imdb_rating,
-                        metacritic: m.metacritic_rating
+                        metacritic: m.metacritic_rating,
+                        duration: m.duration || '',
+                        hamiRating: m.hami_rating
                     }));
 
                     totalItems = data.total;
@@ -584,6 +602,25 @@
             pageMovies.forEach(m => {
                 let ratingBadgesHtml = '';
                 let visualBarsHtml = '';
+
+                // 0. Hami 標章與視覺條
+                if (m.hamiRating !== null) {
+                    ratingBadgesHtml += `
+                        <div class="flex items-center gap-1.5 bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 px-2 py-1 rounded-lg text-sm font-bold" title="Hami Video 評分">
+                            <span class="bg-cyan-500 text-slate-950 px-1 rounded-sm text-xs font-black mr-0.5">Hami</span>
+                            <span>${m.hamiRating.toFixed(1)}</span>
+                        </div>`;
+                    visualBarsHtml += `
+                        <div class="space-y-1">
+                            <div class="flex justify-between text-xs text-slate-400">
+                                <span class="font-medium">Hami Video</span>
+                                <span class="text-cyan-400 font-bold">${m.hamiRating.toFixed(1)}/10</span>
+                            </div>
+                            <div class="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden border border-slate-900">
+                                <div class="bg-cyan-500 h-full rounded-full" style="width: ${m.hamiRating * 10}%"></div>
+                            </div>
+                        </div>`;
+                }
 
                 // 1. IMDb 標章與視覺條
                 if (m.imdbRating !== null) {
@@ -695,7 +732,7 @@
                             <div class="space-y-3.5 z-10">
                                 <div class="flex justify-between items-start gap-2">
                                     <span class="px-2.5 py-0.5 bg-slate-950/80 border border-slate-800 text-slate-300 text-xs font-bold rounded-full uppercase tracking-wider">${m.genre}</span>
-                                    <span class="text-sm text-slate-500 font-medium">${m.country} ${m.year ? `• ${m.year}年` : ''}</span>
+                                    <span class="text-sm text-slate-500 font-medium">${m.country} ${m.year ? `• ${m.year}年` : ''} ${m.duration ? `• ${m.duration}` : ''}</span>
                                 </div>
                                 
                                 <!-- 片名資訊 -->
@@ -731,6 +768,7 @@
                                     <span class="px-2 py-0.5 bg-slate-950 text-slate-300 text-xs font-bold rounded-full border border-slate-900 uppercase tracking-wider whitespace-nowrap">${m.genre}</span>
                                     <h3 class="text-lg font-bold text-slate-100 group-hover:text-amber-400 transition-colors truncate">${m.titleCn}</h3>
                                     <span class="text-sm text-slate-500 font-medium whitespace-nowrap">${m.year ? `${m.year}年` : ''}</span>
+                                    ${m.duration ? `<span class="text-sm text-slate-500 font-medium whitespace-nowrap">${m.duration}</span>` : ''}
                                     <span class="text-sm text-slate-500 font-medium whitespace-nowrap ml-auto md:ml-0 px-2 py-0.5 border border-slate-900 rounded-md bg-slate-950">${m.country}</span>
                                 </div>
                                 <p class="text-sm text-slate-500 italic truncate mb-2.5">${m.titleEn || '&nbsp;'}</p>

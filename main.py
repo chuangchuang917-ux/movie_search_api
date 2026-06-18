@@ -147,6 +147,7 @@ async def search_movies(
     min_rt: Optional[int] = Query(None, description="Minimum Rotten Tomatoes Tomatometer rating"),
     min_rt_audience: Optional[int] = Query(None, description="Minimum Rotten Tomatoes Audience rating"),
     min_mc: Optional[int] = Query(None, description="Minimum Metacritic rating"),
+    min_hami: Optional[float] = Query(None, description="Minimum Hami Video rating"),
     sort_by: str = Query("none", description="Sort criteria"),
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(20, ge=1, le=100, description="Items per page")
@@ -211,6 +212,11 @@ async def search_movies(
             m for m in filtered
             if m.get("metacritic_rating") is not None and m["metacritic_rating"] >= min_mc
         ]
+    if min_hami is not None and min_hami > 0:
+        filtered = [
+            m for m in filtered
+            if m.get("hami_rating") is not None and m["hami_rating"] >= min_hami
+        ]
         
     # 5. Sorting
     if sort_by == "imdb_desc":
@@ -219,6 +225,8 @@ async def search_movies(
         filtered.sort(key=lambda x: x.get("douban_rating") or 0.0, reverse=True)
     elif sort_by == "rt_desc":
         filtered.sort(key=lambda x: x.get("rt_tomatometer") or 0.0, reverse=True)
+    elif sort_by == "hami_desc":
+        filtered.sort(key=lambda x: x.get("hami_rating") or 0.0, reverse=True)
     elif sort_by == "year_desc":
         filtered.sort(key=lambda x: x.get("year") or 0, reverse=True)
     elif sort_by == "year_asc":
@@ -334,6 +342,9 @@ def clean_row_data(row):
     douban_rating = parse_float_score(row.get("douban_rating"))
     imdb_rating = parse_float_score(row.get("imdb_rating"))
     metacritic_rating = parse_int_score(row.get("metacritic_rating"))
+    
+    duration = clean_val(row.get("片長"))
+    hami_rating = parse_float_score(row.get("中華電信評分"))
 
     search_keywords = generate_ngrams(title_zh)
 
@@ -352,6 +363,8 @@ def clean_row_data(row):
         "douban_rating": douban_rating,
         "imdb_rating": imdb_rating,
         "metacritic_rating": metacritic_rating,
+        "duration": duration,
+        "hami_rating": hami_rating,
         "search_keywords": search_keywords,
     }
 
@@ -427,12 +440,22 @@ async def sync_movies(payload: Optional[SyncRequest] = None):
         try:
             doc_data = clean_row_data(row)
             imdb_id = doc_data.get("imdb_id")
+            hami_url = doc_data.get("hami_url")
             
             # Determine Document ID
             if imdb_id and isinstance(imdb_id, str) and imdb_id.startswith("tt"):
                 doc_id = imdb_id.strip()
+            elif hami_url and isinstance(hami_url, str):
+                import hashlib
+                match = re.search(r'/product/(\d+)\.do', hami_url)
+                if match:
+                    doc_id = f"hami_{match.group(1)}"
+                else:
+                    doc_id = hashlib.md5(hami_url.encode('utf-8')).hexdigest()
             else:
-                doc_id = uuid.uuid4().hex
+                import hashlib
+                title_zh = doc_data.get("title_zh") or ""
+                doc_id = hashlib.md5(title_zh.encode('utf-8')).hexdigest()
 
             # Set created_at and updated_at
             doc_data["created_at"] = now
