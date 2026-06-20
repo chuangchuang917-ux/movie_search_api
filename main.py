@@ -327,6 +327,18 @@ def clean_row_data(row):
         except (ValueError, TypeError):
             return None
 
+    def parse_duration_minutes(val):
+        val = clean_val(val)
+        if val is None:
+            return None
+        match = re.search(r'(\d+)', val)
+        if match:
+            try:
+                return int(match.group(1))
+            except (ValueError, TypeError):
+                return None
+        return None
+
     title_zh = clean_val(row.get("電影中文名稱"))
     title_en = clean_val(row.get("電影英文名稱"))
     genres = parse_list(row.get("類型"))
@@ -343,8 +355,15 @@ def clean_row_data(row):
     imdb_rating = parse_float_score(row.get("imdb_rating"))
     metacritic_rating = parse_int_score(row.get("metacritic_rating"))
     
-    duration = clean_val(row.get("片長"))
-    hami_rating = parse_float_score(row.get("中華電信評分"))
+    hami_rating = parse_float_score(row.get("hami_rating"))
+    if hami_rating is None:
+        hami_rating = parse_float_score(row.get("中華電信評分"))
+        
+    hami_duration = clean_val(row.get("hami_duration"))
+    if hami_duration is None:
+        hami_duration = clean_val(row.get("片長"))
+        
+    duration = parse_duration_minutes(hami_duration)
 
     search_keywords = generate_ngrams(title_zh)
 
@@ -364,6 +383,7 @@ def clean_row_data(row):
         "imdb_rating": imdb_rating,
         "metacritic_rating": metacritic_rating,
         "duration": duration,
+        "hami_duration": hami_duration,
         "hami_rating": hami_rating,
         "search_keywords": search_keywords,
     }
@@ -442,16 +462,16 @@ async def sync_movies(payload: Optional[SyncRequest] = None):
             imdb_id = doc_data.get("imdb_id")
             hami_url = doc_data.get("hami_url")
             
-            # Determine Document ID
-            if imdb_id and isinstance(imdb_id, str) and imdb_id.startswith("tt"):
-                doc_id = imdb_id.strip()
-            elif hami_url and isinstance(hami_url, str):
+            # Determine Document ID: prioritize hami_url to prevent duplicate IMDb merges
+            if hami_url and isinstance(hami_url, str):
                 import hashlib
                 match = re.search(r'/product/(\d+)\.do', hami_url)
                 if match:
                     doc_id = f"hami_{match.group(1)}"
                 else:
                     doc_id = hashlib.md5(hami_url.encode('utf-8')).hexdigest()
+            elif imdb_id and isinstance(imdb_id, str) and imdb_id.startswith("tt"):
+                doc_id = imdb_id.strip()
             else:
                 import hashlib
                 title_zh = doc_data.get("title_zh") or ""
