@@ -415,12 +415,26 @@
         });
 
         // 美化 Slider 的通用小工具
+        let sliderDebounceTimer;
         function setupSlider(sliderId, labelId, suffix = '', isInt = false) {
             const slider = document.getElementById(sliderId);
             const label = document.getElementById(labelId);
+            
+            // 1. 拖曳時即時更新數值標籤（保持視覺流暢）
             slider.addEventListener('input', (e) => {
                 const val = isInt ? Math.round(e.target.value) : parseFloat(e.target.value).toFixed(1);
                 label.innerText = val + suffix;
+                
+                // 使用防抖限制 API 請求頻率，拖曳中停頓 250ms 才觸發搜尋
+                clearTimeout(sliderDebounceTimer);
+                sliderDebounceTimer = setTimeout(() => {
+                    triggerFilter(true);
+                }, 250);
+            });
+
+            // 2. 當使用者放開滑桿（或操作結束）時，立即觸發搜尋並清除定時器
+            slider.addEventListener('change', () => {
+                clearTimeout(sliderDebounceTimer);
                 triggerFilter(true);
             });
         }
