@@ -393,17 +393,19 @@
             setupSlider('filterMinHami', 'minHamiLabel', '', false);
 
             // 分頁按鈕
-            document.getElementById('prevPageBtn').addEventListener('click', () => {
+            document.getElementById('prevPageBtn').addEventListener('click', async () => {
                 if (currentPage > 1) {
                     currentPage--;
-                    triggerFilter(false);
+                    await triggerFilter(false);
+                    requestAnimationFrame(() => scrollToResults());
                 }
             });
-            document.getElementById('nextPageBtn').addEventListener('click', () => {
+            document.getElementById('nextPageBtn').addEventListener('click', async () => {
                 const totalPages = Math.ceil(totalItems / itemsPerPage);
                 if (currentPage < totalPages) {
                     currentPage++;
-                    triggerFilter(false);
+                    await triggerFilter(false);
+                    requestAnimationFrame(() => scrollToResults());
                 }
             });
 
@@ -440,6 +442,16 @@
             }
             
             renderMovies();
+        }
+
+        // 滾動到電影結果區域頂部（用於翻頁後自動定位）
+        function scrollToResults() {
+            const target = document.getElementById('moviesGrid');
+            if (target) {
+                const headerHeight = document.querySelector('header')?.offsetHeight || 0;
+                const targetTop = target.getBoundingClientRect().top + window.pageYOffset - headerHeight - 16;
+                window.scrollTo({ top: targetTop, behavior: 'smooth' });
+            }
         }
 
         // 4. 重置所有篩選器數值
