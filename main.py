@@ -39,7 +39,7 @@ if credentials_path and not os.path.exists(credentials_path):
 app = FastAPI(
     title="Movie Search API",
     description="Backend API for searching movies from GCP Firestore",
-    version="1.0.0"
+    version="1.0.1"
 )
 
 # Configure CORS: Allow all origins to enable cross-origin requests from web/mobile clients
