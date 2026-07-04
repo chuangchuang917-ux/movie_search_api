@@ -199,7 +199,7 @@
 
                 <div class="pt-4 border-t border-slate-900/60">
                     <p class="text-sm font-bold text-slate-300 mb-4 flex items-center gap-1.5">
-                        <i data-lucide="sliders-horizontal" class="w-4 h-4 text-amber-500 animate-pulse"></i> 各大平台最低評分臨界值
+                        <i data-lucide="sliders-horizontal" class="w-4 h-4 text-amber-500"></i> 各大平台最低評分臨界值
                     </p>
                     <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-5">
                         <!-- 1. IMDb 滑桿 -->
@@ -393,17 +393,19 @@
             setupSlider('filterMinHami', 'minHamiLabel', '', false);
 
             // 分頁按鈕
-            document.getElementById('prevPageBtn').addEventListener('click', () => {
+            document.getElementById('prevPageBtn').addEventListener('click', async () => {
                 if (currentPage > 1) {
                     currentPage--;
-                    triggerFilter(false);
+                    await triggerFilter(false);
+                    requestAnimationFrame(() => scrollToResults());
                 }
             });
-            document.getElementById('nextPageBtn').addEventListener('click', () => {
+            document.getElementById('nextPageBtn').addEventListener('click', async () => {
                 const totalPages = Math.ceil(totalItems / itemsPerPage);
                 if (currentPage < totalPages) {
                     currentPage++;
-                    triggerFilter(false);
+                    await triggerFilter(false);
+                    requestAnimationFrame(() => scrollToResults());
                 }
             });
 
@@ -413,12 +415,26 @@
         });
 
         // 美化 Slider 的通用小工具
+        let sliderDebounceTimer;
         function setupSlider(sliderId, labelId, suffix = '', isInt = false) {
             const slider = document.getElementById(sliderId);
             const label = document.getElementById(labelId);
+            
+            // 1. 拖曳時即時更新數值標籤（保持視覺流暢）
             slider.addEventListener('input', (e) => {
                 const val = isInt ? Math.round(e.target.value) : parseFloat(e.target.value).toFixed(1);
                 label.innerText = val + suffix;
+                
+                // 使用防抖限制 API 請求頻率，拖曳中停頓 250ms 才觸發搜尋
+                clearTimeout(sliderDebounceTimer);
+                sliderDebounceTimer = setTimeout(() => {
+                    triggerFilter(true);
+                }, 250);
+            });
+
+            // 2. 當使用者放開滑桿（或操作結束）時，立即觸發搜尋並清除定時器
+            slider.addEventListener('change', () => {
+                clearTimeout(sliderDebounceTimer);
                 triggerFilter(true);
             });
         }
@@ -440,6 +456,16 @@
             }
             
             renderMovies();
+        }
+
+        // 滾動到電影結果區域頂部（用於翻頁後自動定位）
+        function scrollToResults() {
+            const target = document.getElementById('moviesGrid');
+            if (target) {
+                const headerHeight = document.querySelector('header')?.offsetHeight || 0;
+                const targetTop = target.getBoundingClientRect().top + window.pageYOffset - headerHeight - 16;
+                window.scrollTo({ top: targetTop, behavior: 'smooth' });
+            }
         }
 
         // 4. 重置所有篩選器數值
@@ -725,14 +751,14 @@
 
                 if (viewMode === 'card') {
                     itemHtml = `
-                        <div class="bg-gradient-to-b from-slate-900/60 to-slate-950/90 border border-slate-900 hover:border-slate-800 rounded-2xl p-5 flex flex-col justify-between transition-all-300 hover:-translate-y-1.5 shadow-md hover:shadow-2xl hover:shadow-amber-500/5 group relative overflow-hidden">
+                        <div class="bg-gradient-to-b from-slate-900/60 to-slate-950/90 border border-slate-900 hover:border-slate-800 rounded-2xl p-5 flex flex-col justify-between transition-all-300 shadow-md hover:shadow-2xl hover:shadow-amber-500/5 group relative overflow-hidden">
                             <div class="absolute inset-0 bg-gradient-to-t from-slate-950/40 via-transparent to-transparent pointer-events-none"></div>
                             
                             <!-- 頂部類別、國家、年份 -->
                             <div class="space-y-3.5 z-10">
                                 <div class="flex justify-between items-start gap-2">
                                     <span class="px-2.5 py-0.5 bg-slate-950/80 border border-slate-800 text-slate-300 text-xs font-bold rounded-full uppercase tracking-wider">${m.genre}</span>
-                                    <span class="text-sm text-slate-500 font-medium">${m.country} ${m.year ? `• ${m.year}年` : ''} ${m.duration ? `• ${m.duration}` : ''}</span>
+                                    <span class="text-sm text-slate-500 font-medium">${m.country} ${m.year ? `• ${m.year}年` : ''} ${m.duration ? `• ${m.duration}分鐘` : ''}</span>
                                 </div>
                                 
                                 <!-- 片名資訊 -->
@@ -768,7 +794,7 @@
                                     <span class="px-2 py-0.5 bg-slate-950 text-slate-300 text-xs font-bold rounded-full border border-slate-900 uppercase tracking-wider whitespace-nowrap">${m.genre}</span>
                                     <h3 class="text-lg font-bold text-slate-100 group-hover:text-amber-400 transition-colors truncate">${m.titleCn}</h3>
                                     <span class="text-sm text-slate-500 font-medium whitespace-nowrap">${m.year ? `${m.year}年` : ''}</span>
-                                    ${m.duration ? `<span class="text-sm text-slate-500 font-medium whitespace-nowrap">${m.duration}</span>` : ''}
+                                    ${m.duration ? `<span class="text-sm text-slate-500 font-medium whitespace-nowrap">${m.duration}分鐘</span>` : ''}
                                     <span class="text-sm text-slate-500 font-medium whitespace-nowrap ml-auto md:ml-0 px-2 py-0.5 border border-slate-900 rounded-md bg-slate-950">${m.country}</span>
                                 </div>
                                 <p class="text-sm text-slate-500 italic truncate mb-2.5">${m.titleEn || '&nbsp;'}</p>
