@@ -71,8 +71,8 @@ def main():
     omdb_indices = df[mask].index.tolist()
     print(f"Candidates with IMDb ID missing RT or MC: {len(omdb_indices):,}")
 
-    # Maximum 2,800 requests to stay safely below daily limits
-    max_requests = min(len(omdb_indices), len(api_keys) * 950)
+    # Maximum 450 requests (150 per key) to stay safely below daily limits across scheduled runs
+    max_requests = min(len(omdb_indices), len(api_keys) * 150)
     tasks = [(idx, str(df.loc[idx, "imdb_id"]).strip(), i) for i, idx in enumerate(omdb_indices[:max_requests])]
     print(f"Queued OMDb queries for this run: {len(tasks):,}")
 
@@ -132,8 +132,27 @@ def main():
     print("--------------------------------------------------")
     print("PHASE 2: Douban Ratings Scraper (Chrome TLS Impersonation)")
     print("--------------------------------------------------")
-    douban_missing = df[df["douban_rating"].isna()].index.tolist()
-    print(f"Movies missing Douban rating: {len(douban_missing):,}")
+    CHECKED_STATE_PATH = "scripts/douban_checked_urls.txt"
+    checked_urls = set()
+    if os.path.exists(CHECKED_STATE_PATH):
+        with open(CHECKED_STATE_PATH, "r", encoding="utf-8") as f:
+            checked_urls = set(line.strip() for line in f if line.strip())
+
+    all_missing = df[df["douban_rating"].isna()].index.tolist()
+    douban_missing = [idx for idx in all_missing if str(df.at[idx, "Hami詳細頁Url"]).strip() not in checked_urls]
+    print(f"Movies missing Douban rating: {len(all_missing):,} | Unchecked in current pass: {len(douban_missing):,}")
+
+    if not douban_missing and all_missing:
+        print("All missing movies checked once! Resetting checklist for a fresh pass...")
+        checked_urls.clear()
+        douban_missing = all_missing
+
+    def save_progress():
+        df.to_csv(CSV_PATH, index=False, encoding="utf-8-sig")
+        os.makedirs(os.path.dirname(CHECKED_STATE_PATH), exist_ok=True)
+        with open(CHECKED_STATE_PATH, "w", encoding="utf-8") as f:
+            for u in sorted(checked_urls):
+                f.write(u + "\n")
 
     session = cffi_requests.Session()
     headers = {
@@ -142,21 +161,23 @@ def main():
     }
 
     def get_douban_page(url):
-        for attempt in range(2):
-            try:
-                r = session.get(url, headers=headers, impersonate="chrome124", timeout=15)
-                if r.status_code == 200:
-                    return r.text
-                elif r.status_code in [403, 418, 429]:
-                    print(f"\n[Douban Cooldown HTTP {r.status_code}] Sleeping 60s...")
-                    time.sleep(60)
-            except Exception:
-                time.sleep(2)
-        return None
+        try:
+            r = session.get(url, headers=headers, impersonate="chrome124", timeout=15)
+            if r.status_code == 200:
+                return r.text, False
+            elif r.status_code in [403, 418, 429]:
+                print(f"\n[Douban HTTP {r.status_code}] Rate-limit/WAF encountered.")
+                return None, True
+        except Exception as e:
+            print(f"\n[Douban Request Error] {e}")
+            time.sleep(2)
+        return None, False
 
     def search_douban(imdb_id, title_zh):
         if imdb_id and isinstance(imdb_id, str) and imdb_id.startswith("tt"):
-            html = get_douban_page(f"https://www.douban.com/search?cat=1002&q={imdb_id}")
+            html, blocked = get_douban_page(f"https://www.douban.com/search?cat=1002&q={imdb_id}")
+            if blocked:
+                return None, True
             if html:
                 soup = BeautifulSoup(html, "html.parser")
                 res = soup.select_one(".result")
@@ -164,47 +185,66 @@ def main():
                     num = res.select_one(".rating_nums")
                     if num and num.text.strip():
                         try:
-                            return float(num.text.strip())
+                            return float(num.text.strip()), False
                         except ValueError:
                             pass
         c_zh = clean_title(title_zh)
         if c_zh:
-            time.sleep(random.uniform(1.2, 2.0))
+            time.sleep(random.uniform(1.5, 2.5))
             q = urllib.parse.quote(c_zh)
-            html = get_douban_page(f"https://www.douban.com/search?cat=1002&q={q}")
+            html, blocked = get_douban_page(f"https://www.douban.com/search?cat=1002&q={q}")
+            if blocked:
+                return None, True
             if html:
                 soup = BeautifulSoup(html, "html.parser")
                 for res in soup.select(".result")[:2]:
                     num = res.select_one(".rating_nums")
                     if num and num.text.strip():
                         try:
-                            return float(num.text.strip())
+                            return float(num.text.strip()), False
                         except ValueError:
                             pass
-        return None
+        return None, False
 
     added_douban = 0
-    # Process up to 500 Douban items per workflow run to avoid timeouts
-    max_douban_per_run = min(len(douban_missing), 500)
+    consecutive_blocks = 0
+    # Process up to 150 Douban items per workflow run to complete cleanly in ~15-20 minutes
+    max_douban_per_run = min(len(douban_missing), 150)
     print(f"Processing batch of {max_douban_per_run} movies for Douban...")
 
     for count, idx in enumerate(douban_missing[:max_douban_per_run]):
         r = df.loc[idx]
-        score = search_douban(r.get("imdb_id"), r.get("電影中文名稱"))
+        hami_url = str(r.get("Hami詳細頁Url", "")).strip()
+        score, blocked = search_douban(r.get("imdb_id"), r.get("電影中文名稱"))
+
+        if blocked:
+            consecutive_blocks += 1
+            if consecutive_blocks >= 3:
+                print("\n⚠️ Douban WAF blocked 3 consecutive requests. Gracefully saving progress and exiting early...")
+                save_progress()
+                break
+            time.sleep(5)
+        else:
+            consecutive_blocks = 0
+            if hami_url:
+                checked_urls.add(hami_url)
+
         if score is not None:
             df.at[idx, "douban_rating"] = score
             added_douban += 1
             print(f"  + [{score}] {r.get('電影中文名稱')}")
 
-        if (count + 1) % 25 == 0:
-            df.to_csv(CSV_PATH, index=False, encoding="utf-8-sig")
+        if (count + 1) % 20 == 0:
+            save_progress()
             cur_db = df["douban_rating"].notna().sum()
             print(f"  [Douban Progress: {count+1}/{max_douban_per_run}] Added: {added_douban} | Total Douban: {cur_db}/{total_len} ({cur_db/total_len*100:.1f}%)")
             if cur_db >= target_80:
                 print("🎉 Target reached! Douban rating is at or above 80%!")
                 break
 
-    df.to_csv(CSV_PATH, index=False, encoding="utf-8-sig")
+        time.sleep(random.uniform(1.5, 2.8))
+
+    save_progress()
     print("\n==================================================")
     print("✅ CLOUD BOOSTER FINISHED! UPDATED STATS:")
     for col in ["imdb_rating", "rt_tomatometer", "douban_rating", "metacritic_rating"]:

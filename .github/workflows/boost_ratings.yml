@@ -3,7 +3,7 @@ name: Cloud Movie Ratings Booster (80% Target)
 on:
   workflow_dispatch: # Allows manual trigger from GitHub web page / mobile app
   schedule:
-    - cron: '0 19 * * *' # Automatically runs daily at 03:00 AM (Taiwan Time UTC+8)
+    - cron: '0 3,11,19 * * *' # Runs 3 times daily (11:00, 19:00, 03:00 Taiwan Time UTC+8)
 
 permissions:
   contents: write
@@ -11,7 +11,7 @@ permissions:
 jobs:
   boost-ratings:
     runs-on: ubuntu-latest
-    timeout-minutes: 360 # Up to 6 hours cloud execution time
+    timeout-minutes: 45 # Cap job runtime to 45 minutes; script exits gracefully on WAF blocks
 
     steps:
       - name: Checkout Repository
@@ -39,13 +39,18 @@ jobs:
           python scripts/boost_ratings.py
 
       - name: Commit and Push Updated Database
+        if: always()
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add hami_movies_review.csv
+          if [ -f scripts/douban_checked_urls.txt ]; then
+            git add scripts/douban_checked_urls.txt
+          fi
           if git diff --staged --quiet; then
             echo "No changes in ratings database to commit."
           else
-            git commit -m "chore(ratings): automated cloud ratings boost for Rotten Tomatoes & Douban"
+            git commit -m "chore(ratings): automated cloud ratings boost for Douban"
+            git pull --rebase origin main || true
             git push origin main
           fi
