@@ -1,0 +1,51 @@
+name: Cloud Movie Ratings Booster (80% Target)
+
+on:
+  workflow_dispatch: # Allows manual trigger from GitHub web page / mobile app
+  schedule:
+    - cron: '0 19 * * *' # Automatically runs daily at 03:00 AM (Taiwan Time UTC+8)
+
+permissions:
+  contents: write
+
+jobs:
+  boost-ratings:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360 # Up to 6 hours cloud execution time
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas requests curl_cffi beautifulsoup4
+
+      - name: Run Ratings Booster (OMDb & Douban)
+        env:
+          OMDB_API_KEY: ${{ secrets.OMDB_API_KEY || 'f2e23cb6' }}
+          OMDB_API_KEY_2: ${{ secrets.OMDB_API_KEY_2 || 'e8819fae' }}
+          OMDB_API_KEY_3: ${{ secrets.OMDB_API_KEY_3 || '8d8ccf3e' }}
+        run: |
+          python scripts/boost_ratings.py
+
+      - name: Commit and Push Updated Database
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add hami_movies_review.csv
+          if git diff --staged --quiet; then
+            echo "No changes in ratings database to commit."
+          else
+            git commit -m "chore(ratings): automated cloud ratings boost for Rotten Tomatoes & Douban"
+            git push origin main
+          fi
